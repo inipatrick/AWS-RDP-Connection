@@ -1,2 +1,3 @@
-# AWS-RDP-Connection
-This is a PowerShell script to quick view and connect to EC2 Windows Instances.
+##AWS RDP Connections
+
+This is a script to allow quick RDP connections to your Windows EC2 instances in AWS.
