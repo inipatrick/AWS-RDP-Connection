@@ -20,7 +20,7 @@ class AWSUsers : System.Management.Automation.IValidateSetValuesGenerator {
         $Global:AWSUserList = @()
         Get-Content -path $ENV:USERPROFILE\.aws\credentials | Foreach-Object {
             if ($_ -match '[[].+]') { 
-                $Global:AWSUserList += $($_ -replace "\[" , "" -replace "\]", "") 
+                $Global:AWSUserList += $(($_ -replace "\[" , "" -replace "\]", "").Trim()) 
             }
         }
         return $Global:AWSUserList
@@ -28,10 +28,13 @@ class AWSUsers : System.Management.Automation.IValidateSetValuesGenerator {
 }
 
 function Start-AWS {
+    [Alias("SAWSs")]
     Param (
-        [Parameter(Mandatory)]
+        [Parameter(Mandatory, Position = 0)]
         [ValidateSet([AWSUsers], ErrorMessage = "Invalid entry {0} - Please enter a valid entry: {1}")]
-        [String]$AWSProfile
+        [String]$AWSProfile,
+        [Parameter(ParameterSetName = "Search", Position = 1)]
+        [String]$SearchTerm
     )
     
     Clear-Host
@@ -42,7 +45,11 @@ function Start-AWS {
     $Result = Read-AWSInstall
     
     if ($Result -like "* installed *") {
-        Read-AWSSelect
+        if ($PSCmdlet.ParameterSetName -eq "search") {
+            Read-AWSSelect -Search $SearchTerm
+        } else { 
+            Read-AWSSelect
+        }
     }
 }
 
@@ -79,11 +86,35 @@ $StartSSM = {
     aws ssm start-session --target $target --document-name AWS-StartPortForwardingSession --parameters portNumber=3389,localPortNumber=$($PortToUse) --profile $($ENV:AWS_Profile)
 }
 
+$GetAWSInstance = {
+    Param (
+        [string]$Search
+    )
+    $AWSInstances = (aws ec2 describe-instances --region eu-west-2 --filters "Name=tag:Name,Values=*$($Search)*"| ConvertFrom-Json).Reservations
+    return $AWSInstances
+}
+
 function Read-AWSSelect { 
+    Param (
+        [string]$Search
+    )
+    
+    Write-host "Retreiving AWS instances."
+    Start-Job -ScriptBlock $GetAWSInstance -Name GetAWSInstance -ArgumentList @($Search) | Out-Null
 
-    $AWSInstances = (aws ec2 describe-instances --region eu-west-2 | ConvertFrom-Json).Reservations
-    # needs to be ordered
+    $i = 0
+    Do {
+        Write-host $("`r").PadRight($i, '.') -NoNewLine
+        Start-Sleep -Milliseconds 250
+        $i++
+    } while ((Get-Job -State Running -Newest 1).State -eq "Running")
 
+    Show-AWSInstances
+}
+
+function Show-AWSInstances {
+    $AWSInstances = Receive-Job -Name GetAWSInstance
+    
     $Servers = @()
 
     $AWSInstances | Select-Object -ExpandProperty Instances | Foreach-Object {
@@ -94,35 +125,45 @@ function Read-AWSSelect {
         $Servers += $ServerDetails
     }
 
-    $AWSENV = $(Write-Host "Setup connection to $($ENV:AWS_Profile) select an instance?" -ForeGroundColor Green
+    $AWSENV = $(Write-Host "`nSetup connection to $($ENV:AWS_Profile) select an instance?" -ForeGroundColor Green
 
-    Write-host "ID `t | InstanceID `t | Server State `t | Server Name"
-    Write-Host "".PadRight((("ID     | InstanceID     | Server State     | Server Name").Length), '_')
+    Write-host "ID  | InstanceID `t`t | Server State | Server Name"
+    Write-Host "".PadRight((("ID  | InstanceID               | Server State | Server Name      ").Length), '‾')
 
-    ###### sort this to have a where-object in it::: $Servers | Where-object {$Servername -match '[$anyinput.+]'} | Sort-object ServerName | Foreach-object {
-    ###### Remove the first 5 count below and add it as an option. 
-    ###### might be worth putting the below into it's own function
-    $i = 0;
-    $Servers | Sort-object ServerName | Select-Object -First 5 | Foreach-object {
+    $i = 1
+    $Servers | Sort-object ServerName | Foreach-Object {
+
         $Iid = $_.InstanceId
         $SN = $_.ServerName
         $SS = $_.ServerState
+
+        if ($SS -eq "running") { 
+            $SS = "$($SS) 🟢"
+        } else { 
+            $SS = "$($SS) 🔴"
+        }
+
+        if ($i -lt 10) { 
+            $Iid = " $($Iid)"
+        }
+
         $Colour = Get-Colour
 
-        Write-Host "$($i) $($Iid) `t $($SS) `t $($SN)" -ForeGroundColor $Colour
+        Write-Host "$($i)    $($Iid) `t   $($SS)     $($SN)" -ForegroundColor $Colour
         $i++
     }
-
+    Write-host "Selection ID: " -NoNewLine
     Read-Host)
 
-    if ($AWSENV -match "[0-9]") { 
-        $Server = ($Service.GetEnumerator() | Where-Object { ($_.Name -split (' - '))[0] -eq $AWSENV } | Select-Object -Last 1).Value
+    if ($AWSENV -match "[0-9]") {
+        $(($Servers[$AWSENV]).ServerName)
         $PortToUse = Get-Port
-        Write-Host "Server $Server" -BackgroundColor Blue -ForeGroundColor White
-        Set-TabTitle -TabTitle "$Server : $($PortToUse) 🟢"
-        Start-Job -ScriptBlock $StartSSM -ArgumentList @($Server, $PortToUse) | Out-Null
+        Write-Host "Server $(($Servers[$AWSENV]).ServerName) $(($Servers[$AWSENV]).InstanceID) : $PortToUse"
+        Set-TabTitle -TabTitle "$(($Servers[$AWSENV]).ServerName) : $PortToUse 🟢"
+        Start-Job -ScriptBlock $StartSSM -ArgumentList @($(($Servers[$AWSENV]).InstanceID), $PortToUse) | Out-Null
+
         Start-RDP -PortToUse $PortToUse
-    } else {
+    } else { 
         Read-AWSSelect
     }
 }
@@ -181,6 +222,3 @@ function Get-Colour {
 
     return $ColourValue
 }
-
-
-Set-Alias SAWS Start-AWS
