@@ -1,7 +1,7 @@
 {
-	"ip":"Jojolandtu.aternos.me",
-	"port": "37752",
-	"name": "bot1234vanev",
+	"ip":"monena.aternos.me",
+	"port": "12600",
+	"name": "monenabot211",
 	"auto-night-skip":"false",
 	"login-enabled":"false",
 	"register-cmd":"/register pass123 ",
